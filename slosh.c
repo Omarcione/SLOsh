@@ -25,7 +25,8 @@
 #define MAX_ARGS 64
 
 /* Global variable for signal handling */
-volatile sig_atomic_t child_running = 0;
+volatile pid_t children_running = 0;
+volatile sig_atomic_t sigint_recv = 0;
 
 /* Forward declarations */
 void display_prompt(void);
@@ -40,9 +41,9 @@ void display_prompt(void);
  */
 void sigint_handler(int sig) {
     /* TODO: Your implementation here */
-    // child process is killed so set to 0
-    if (sig == SIGINT)
-        child_running = 0;
+    // set flag for fgets to ignore CTRL+C
+    (void)sig;
+    sigint_recv = 1;
 }
 
 /**
@@ -92,7 +93,16 @@ int parse_input(char *input, char **args) {
     char *p = input;
 
     while (*p) {
-        while (*p && is_ws(*p)) { *p = '\0'; p++; }
+        if (argc > MAX_ARGS) { 
+            fprintf(stderr, "Too many arguments provided. Limit: %x\n", MAX_ARGS);
+            return -1;
+        }
+
+        while (*p && is_ws(*p)) {
+            *p = '\0'; 
+            p++; 
+        }
+
         if (!*p) break;
 
         args[argc++] = p;
@@ -109,6 +119,10 @@ int parse_input(char *input, char **args) {
         if (strchr(args[i], '|') || strchr(args[i], '>')) {
             if (!is_special(args[i])) {
                 fprintf(stderr, "Error: Operators must be whitespace separated\n");
+                return -1;
+            }
+            if (!strcmp(args[0], "|") || !strcmp(args[0], ">") || !strcmp(args[0], ">>")) {
+                fprintf(stderr, "Error: Invalid input string. Cannot begin with operator '%s'\n", args[0]);
                 return -1;
             }
         }
@@ -131,9 +145,48 @@ int parse_input(char *input, char **args) {
  *
  * @param args Array of command arguments (NULL-terminated)
  */
-void execute_command(char **args) {
+void execute_command(char **args, int argc) {
     /* TODO: Your implementation here */
-    (void)args;
+
+    // first set up redirects
+    int redirect; // 0: None, 1: replace (>), 2: append (>>)
+    char *filepath;
+    for (int i = 0; i < argc; i++) {
+        if (!strcmp(args[i], ">")) {
+            redirect = 1;
+            filepath = args[i+1];            
+        }
+        if (!strcmp(args[i], ">>")) {
+            redirect = 2;
+            filepath = args[i+1];            
+        }
+    }
+    if (redirect) {
+        int fd = fopen(filepath, "w" ? redirect == 1: "a" );
+
+    }
+
+    int i;
+    int pipe_present = 0;
+    for (i = 0; i < argc; i++) {
+        if (!strcmp(args[i], "|")) {
+            pipe_present = i;
+        }
+    }
+    if (pipe_present) { // do piping stuff, need 2 forks, 2 execs etc
+        char **cmd1, **cmd2;
+        
+        //divide into 2 cmds, seperated by "|"
+        cmd1 = args;
+        args[i++] = NULL; //make "|" into NULL to signify end of cmd1
+        cmd2 = args[i]; //start cmd2 right after
+    }
+    else { // no pipes just run as normal
+
+    }
+
+    execvp(args[0], args);
+
 }
 
 /**
@@ -162,6 +215,22 @@ int handle_builtin(char **args) {
     return -1;  /* Not a builtin command */
 }
 
+void reap_children(void) {
+    int status;
+    pid_t pid;
+
+    while((pid = waitpid(0, &status, 0)) > 0) { //wait for all children in pgid
+        if (WIFSIGNALED(status)) {
+            printf("Child with PID %x killed by SIGINT.", pid);
+        }
+        children_running--;
+    }
+    if (pid == -1 && errno != ECHILD) {
+        perror("waitpid");
+        children_running = 0;
+    }
+}
+
 int main(void) {
     char input[MAX_INPUT_SIZE];
     char *args[MAX_ARGS];
@@ -169,7 +238,7 @@ int main(void) {
     int builtin_result;
 
     /* TODO: Set up signal handling. Which signals matter to a shell? */
-    struct sigaction sa;
+    struct sigaction sa = {0};
     sa.sa_handler = sigint_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
@@ -177,16 +246,29 @@ int main(void) {
     sigaction(SIGINT, &sa, NULL);
 
     while (status) {
+
+        if (children_running) // if child running, check if done/killed
+            reap_children();
+
         display_prompt();
 
         /* Read input and handle signal interruption */
         if (fgets(input, MAX_INPUT_SIZE, stdin) == NULL) {
             /* TODO: Handle the case when fgets returns NULL. When does this happen? */
+            // Happens on SIGINT, so just continue if sigint was recieved
+            if (sigint_recv) {
+                sigint_recv = 0;
+                continue;
+            }
             break;
         }
 
         /* Parse input */
-        parse_input(input, args);
+        int argc = parse_input(input, args);
+        // for (int i=0; i< argc; i++) {
+        //     printf("arg[%x]: %s\n", i, args[i]);
+        //     fflush(stdout);
+        // }
 
         /* Handle empty command */
         if (args[0] == NULL) {
@@ -201,7 +283,7 @@ int main(void) {
         }
 
         /* Execute external command */
-        execute_command(args);
+        execute_command(args, argc);
     }
 
     printf("SLOsh exiting...\n");
