@@ -40,6 +40,9 @@ void display_prompt(void);
  */
 void sigint_handler(int sig) {
     /* TODO: Your implementation here */
+    // child process is killed so set to 0
+    if (sig == SIGINT)
+        child_running = 0;
 }
 
 /**
@@ -61,6 +64,17 @@ void display_prompt(void) {
     }
 }
 
+//helper funcs
+static int is_ws(char c) {
+    return c == ' ' || c == '\t' || c == '\n';
+}
+
+static int is_special(const char *s) {
+    return (s[0] == '|' && s[1] == '\0') ||
+           (s[0] == '>' && s[1] == '\0') ||
+           (s[0] == '>' && s[1] == '>' && s[2] == '\0');
+}
+
 /**
  * Parse the input line into command arguments
  *
@@ -74,9 +88,35 @@ void display_prompt(void) {
  * @return Number of arguments parsed
  */
 int parse_input(char *input, char **args) {
-    /* TODO: Your implementation here */
-    return 0;
+    int argc = 0;
+    char *p = input;
+
+    while (*p) {
+        while (*p && is_ws(*p)) { *p = '\0'; p++; }
+        if (!*p) break;
+
+        args[argc++] = p;
+
+        while (*p && !is_ws(*p)) p++;
+
+        if (*p) { *p = '\0'; p++; }
+    }
+
+    args[argc] = NULL;
+
+    // validate: operator chars must appear only as standalone tokens
+    for (int i = 0; i < argc; i++) {
+        if (strchr(args[i], '|') || strchr(args[i], '>')) {
+            if (!is_special(args[i])) {
+                fprintf(stderr, "Error: Operators must be whitespace separated\n");
+                return -1;
+            }
+        }
+    }
+
+    return argc;
 }
+
 
 /**
  * Execute the given command with its arguments
@@ -93,6 +133,7 @@ int parse_input(char *input, char **args) {
  */
 void execute_command(char **args) {
     /* TODO: Your implementation here */
+    (void)args;
 }
 
 /**
@@ -107,6 +148,17 @@ void execute_command(char **args) {
  */
 int handle_builtin(char **args) {
     /* TODO: Your implementation here */
+    if (!strcmp(args[0], "exit")) { // handle exit
+        return 0;
+    }
+    
+    if (!strcmp(args[0], "cd")){ // handle cd
+        if (chdir(args[1])) { //truthy if fail
+            perror("cd");
+        }
+        return 1;
+    }
+
     return -1;  /* Not a builtin command */
 }
 
@@ -117,6 +169,12 @@ int main(void) {
     int builtin_result;
 
     /* TODO: Set up signal handling. Which signals matter to a shell? */
+    struct sigaction sa;
+    sa.sa_handler = sigint_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    sigaction(SIGINT, &sa, NULL);
 
     while (status) {
         display_prompt();
