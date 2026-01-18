@@ -121,13 +121,16 @@ int parse_input(char *input, char **args) {
                 fprintf(stderr, "Error: Operators must be whitespace separated\n");
                 return -1;
             }
-            if (!strcmp(args[0], "|") || !strcmp(args[0], ">") || !strcmp(args[0], ">>")) {
-                fprintf(stderr, "Error: Invalid input string. Cannot begin with operator '%s'\n", args[0]);
-                return -1;
-            }
         }
     }
-
+    if (!strcmp(args[0], "|") || !strcmp(args[0], ">") || !strcmp(args[0], ">>")) {
+            fprintf(stderr, "Error: Invalid input string. Cannot begin with operator '%s'\n", args[0]);
+            return -1;
+        }
+    if (!strcmp(args[argc - 1], "|") || !strcmp(args[argc - 1], ">") || !strcmp(args[argc - 1], ">>")) {
+        fprintf(stderr, "Error: Invalid input string. Cannot end with operator '%s'\n", args[0]);
+        return -1;
+    }
     return argc;
 }
 
@@ -149,44 +152,132 @@ void execute_command(char **args, int argc) {
     /* TODO: Your implementation here */
 
     // first set up redirects
-    int redirect; // 0: None, 1: replace (>), 2: append (>>)
+    int redirect = 0; // 0: None, 1: replace (>), 2: append (>>)
     char *filepath;
+    int fd = -1;
     for (int i = 0; i < argc; i++) {
         if (!strcmp(args[i], ">")) {
             redirect = 1;
-            filepath = args[i+1];            
+            filepath = args[i+1];  
+            break;          
         }
         if (!strcmp(args[i], ">>")) {
             redirect = 2;
-            filepath = args[i+1];            
+            filepath = args[i+1];    
+            break;        
         }
     }
-    if (redirect) {
-        int fd = fopen(filepath, "w" ? redirect == 1: "a" );
 
+    int flags = 0;
+    if (redirect == 1) {
+        flags = O_WRONLY | O_CREAT | O_TRUNC;
     }
+    else if (redirect == 2) {
+        flags = O_WRONLY | O_CREAT | O_APPEND;
+    }
+    if (flags) {
+        printf("Redirect detected\n");
+        fd = open(filepath, flags, 0664);
+        if (fd < 0) {
+            perror("open");
+            exit(1);
+        }
+    }
+    //now we have fd for child to use if needed.
 
+    //now set up N pipes.
     int i;
-    int pipe_present = 0;
-    for (i = 0; i < argc; i++) {
+    int pipes = 0;
+    char **cmds[MAX_ARGS];
+    cmds[0] = &args[0];
+    for (i = 0; args[i] != NULL; ++i) {
         if (!strcmp(args[i], "|")) {
-            pipe_present = i;
+            args[i] = NULL;
+            cmds[++pipes] = &args[i+1];
         }
     }
-    if (pipe_present) { // do piping stuff, need 2 forks, 2 execs etc
-        char **cmd1, **cmd2;
-        
-        //divide into 2 cmds, seperated by "|"
-        cmd1 = args;
-        args[i++] = NULL; //make "|" into NULL to signify end of cmd1
-        cmd2 = args[i]; //start cmd2 right after
+    cmds[pipes+1] = NULL;
+    if (pipes) { // do piping stuff
+        pid_t pids[pipes+1];
+        int pipefds[pipes][2];
+
+        //create all pipes
+        for (i = 0; i < pipes; ++i) {
+            if(pipe(pipefds[i]) == -1) {
+                perror("pipe");
+            }
+        }
+
+        // fork each command
+        for (i = 0; i < pipes + 1; ++i) {
+            pid_t pid = fork();
+            if (pid == -1)
+                perror("fork");
+
+            if (pid == 0) { // child
+                // set sig handlers back to default
+                struct sigaction sa = {0};
+                sa.sa_handler = SIG_DFL;
+                sigemptyset(&sa.sa_mask);
+                sa.sa_flags = 0;
+
+                sigaction(SIGINT, &sa, NULL);
+
+                if (i > 0) { // not first command: stdin from previous pipe
+                    if (dup2(pipefds[i-1][0], STDIN_FILENO) < 0) {
+                        perror("dup2");
+                    }
+                }
+                if (i < pipes) { // not last command: stdout to next pipe
+                    if (dup2(pipefds[i][1], STDOUT_FILENO) < 0) {
+                        perror("dup2");
+                    }
+                }
+
+                //close both ends of all pipes in child
+                for (int j = 0; j < pipes; ++j) {
+                    close(pipefds[j][0]);
+                    close(pipefds[j][1]);
+                }
+                
+                execvp(cmds[i][0], cmds[i]); //exec new command
+                perror("execvp");
+                exit(127);
+            }
+
+            // parent
+            pids[i] = pid;
+            children_running++;
+        }
+        //close all pipes in parent
+        for (i = 0; i < pipes; ++i) {
+            close(pipefds[i][0]);
+            close(pipefds[i][1]);
+        }
     }
+
     else { // no pipes just run as normal
+        pid_t pid = fork();
+            if (pid == -1)
+                perror("fork");
 
+            if (pid == 0) { // child
+                // set sig handlers back to default
+                struct sigaction sa = {0};
+                sa.sa_handler = SIG_DFL;
+                sigemptyset(&sa.sa_mask);
+                sa.sa_flags = 0;
+
+                sigaction(SIGINT, &sa, NULL);
+
+                execvp(cmds[0][0], cmds[0]); //exec new command
+                perror("execvp");
+                exit(127);
+            }
+
+            //parent
+            children_running++;
     }
-
-    execvp(args[0], args);
-
 }
 
 /**
@@ -247,11 +338,10 @@ int main(void) {
 
     while (status) {
 
-        if (children_running) // if child running, check if done/killed
+        if (children_running) // if child running, wait for done/killed
             reap_children();
 
         display_prompt();
-
         /* Read input and handle signal interruption */
         if (fgets(input, MAX_INPUT_SIZE, stdin) == NULL) {
             /* TODO: Handle the case when fgets returns NULL. When does this happen? */
