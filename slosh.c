@@ -169,13 +169,13 @@ void execute_command(char **args, int argc) {
     }
 
     int flags = 0;
-    if (redirect == 1) {
+    if (redirect == 1) { // Truncate
         flags = O_WRONLY | O_CREAT | O_TRUNC;
     }
-    else if (redirect == 2) {
+    else if (redirect == 2) { // append
         flags = O_WRONLY | O_CREAT | O_APPEND;
     }
-    if (flags) {
+    if (flags) { // open with given flag
         printf("Redirect detected\n");
         fd = open(filepath, flags, 0664);
         if (fd < 0) {
@@ -184,6 +184,7 @@ void execute_command(char **args, int argc) {
         }
     }
     //now we have fd for child to use if needed.
+    //TODO: Rest of >/>> logic not implemented
 
     //now set up N pipes.
     int i;
