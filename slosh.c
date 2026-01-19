@@ -131,7 +131,7 @@ int parse_input(char *input, char **args) {
             return -1;
         }
     if (!strcmp(args[argc - 1], "|") || !strcmp(args[argc - 1], ">") || !strcmp(args[argc - 1], ">>")) {
-        fprintf(stderr, "Error: Invalid input string. Cannot end with operator '%s'\n", args[0]);
+        fprintf(stderr, "Error: Invalid input string. Cannot end with operator '%s'\n", args[argc - 1]);
         return -1;
     }
     return argc;
@@ -227,7 +227,7 @@ void execute_command(char **args, int argc) {
                 }
 
                 // apply redirection here
-                if (redirect) {
+                if (redirect && i == pipes) { // only apply redirect to last command
                     // ">" to truncate, ">>" to append
                     int flags = O_WRONLY | O_CREAT | (redirect == 1 ? O_TRUNC : O_APPEND);
                     int fd = open(filepath, flags, 0664);
@@ -244,7 +244,11 @@ void execute_command(char **args, int argc) {
                 }
                 
                 execvp(cmds[i][0], cmds[i]); //exec new command
-                perror("execvp");
+                if (errno == ENOENT) {
+                    fprintf(stderr, "%s: command not found\n", cmds[i][0]);
+                } else {
+                    perror(cmds[i][0]);
+                }
                 exit(127);
             }
 
@@ -291,7 +295,11 @@ void execute_command(char **args, int argc) {
                 }
 
                 execvp(cmds[0][0], cmds[0]); //exec new command
-                perror("execvp");
+                if (errno == ENOENT) {
+                    fprintf(stderr, "%s: command not found\n", cmds[0][0]);
+                } else {
+                    perror(cmds[0][0]);
+                }
                 exit(127);
             }
 
@@ -340,6 +348,12 @@ void reap_children(void) {
         perror("waitpid");
         children_running = 0;
     }
+    if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        fprintf(stderr, "Exit status %d\n", WEXITSTATUS(status));
+    }
+    if (WIFSIGNALED(status)) {
+        fprintf(stderr, "Terminated by signal %d\n", WTERMSIG(status));
+    }
 }
 
 int main(void) {
@@ -375,13 +389,9 @@ int main(void) {
 
         /* Parse input */
         int argc = parse_input(input, args);
-        // for (int i=0; i< argc; i++) {
-        //     printf("arg[%x]: %s\n", i, args[i]);
-        //     fflush(stdout);
-        // }
 
-        /* Handle empty command */
-        if (args[0] == NULL) {
+        /* Handle empty command or invalid input */
+        if (args[0] == NULL || argc == -1) {
             continue;
         }
 
