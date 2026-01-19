@@ -113,6 +113,9 @@ int parse_input(char *input, char **args) {
     }
 
     args[argc] = NULL;
+    if (argc == 0) {
+        return 0; // early return for empty input
+    }
 
     // validate: operator chars must appear only as standalone tokens
     for (int i = 0; i < argc; i++) {
@@ -154,37 +157,19 @@ void execute_command(char **args, int argc) {
     // first set up redirects
     int redirect = 0; // 0: None, 1: replace (>), 2: append (>>)
     char *filepath;
-    int fd = -1;
     for (int i = 0; i < argc; i++) {
-        if (!strcmp(args[i], ">")) {
-            redirect = 1;
-            filepath = args[i+1];  
-            break;          
-        }
-        if (!strcmp(args[i], ">>")) {
-            redirect = 2;
-            filepath = args[i+1];    
-            break;        
-        }
-    }
-
-    int flags = 0;
-    if (redirect == 1) { // Truncate
-        flags = O_WRONLY | O_CREAT | O_TRUNC;
-    }
-    else if (redirect == 2) { // append
-        flags = O_WRONLY | O_CREAT | O_APPEND;
-    }
-    if (flags) { // open with given flag
-        printf("Redirect detected\n");
-        fd = open(filepath, flags, 0664);
-        if (fd < 0) {
-            perror("open");
-            exit(1);
+        if (args[i] && (!strcmp(args[i], ">") || !strcmp(args[i], ">>"))) {
+            if (i + 1 >= argc || args[i+1] == NULL) {
+                fprintf(stderr, "Error: redirection missing filename\n");
+                return;
+            }
+            redirect = (!strcmp(args[i], ">")) ? 1 : 2;
+            filepath = args[i+1];
+            args[i] = NULL; // terminate args so not passed to execvp
+            args[i+1] = NULL;
+            break;
         }
     }
-    //now we have fd for child to use if needed.
-    //TODO: Rest of >/>> logic not implemented
 
     //now set up N pipes.
     int i;
@@ -240,6 +225,23 @@ void execute_command(char **args, int argc) {
                     close(pipefds[j][0]);
                     close(pipefds[j][1]);
                 }
+
+                // apply redirection here
+                if (redirect) {
+                    // ">" to truncate, ">>" to append
+                    int flags = O_WRONLY | O_CREAT | (redirect == 1 ? O_TRUNC : O_APPEND);
+                    int fd = open(filepath, flags, 0664);
+                    if (fd < 0) { 
+                        perror("open"); 
+                        exit(1); 
+                    }
+                    // redirect stdout to file
+                    if (dup2(fd, STDOUT_FILENO) < 0) { 
+                        perror("dup2"); 
+                        exit(1);
+                    }
+                    close(fd);
+                }
                 
                 execvp(cmds[i][0], cmds[i]); //exec new command
                 perror("execvp");
@@ -270,6 +272,23 @@ void execute_command(char **args, int argc) {
                 sa.sa_flags = 0;
 
                 sigaction(SIGINT, &sa, NULL);
+
+                // apply redirection here
+                if (redirect) {
+                    // ">" to truncate, ">>" to append
+                    int flags = O_WRONLY | O_CREAT | (redirect == 1 ? O_TRUNC : O_APPEND);
+                    int fd = open(filepath, flags, 0664);
+                    if (fd < 0) { 
+                        perror("open"); 
+                        exit(1); 
+                    }
+                    // redirect stdout to file
+                    if (dup2(fd, STDOUT_FILENO) < 0) { 
+                        perror("dup2"); 
+                        exit(1);
+                    }
+                    close(fd);
+                }
 
                 execvp(cmds[0][0], cmds[0]); //exec new command
                 perror("execvp");
