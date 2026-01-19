@@ -1,6 +1,7 @@
 Jack Stewart and Owen Marcione
 SLOsh program
 
+Make sure to put spaces between inputs eg. "ls ./foo | grep bar"
 
 
 current issues:

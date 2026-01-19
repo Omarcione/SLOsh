@@ -269,7 +269,7 @@ void execute_command(char **args, int argc) {
                 perror("fork");
 
             if (pid == 0) { // child
-                // set sig handlers back to default
+                // set sig handlers back to default in child
                 struct sigaction sa = {0};
                 sa.sa_handler = SIG_DFL;
                 sigemptyset(&sa.sa_mask);
@@ -340,19 +340,23 @@ void reap_children(void) {
 
     while((pid = waitpid(0, &status, 0)) > 0) { //wait for all children in pgid
         if (WIFSIGNALED(status)) {
-            printf("Child with PID %x killed by SIGINT.", pid);
+            printf("Child %d terminated by signal %d\n", (int)pid, WTERMSIG(status));
         }
+        if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+            fprintf(stderr, "Child %d exited with status %d\n", (int)pid, WEXITSTATUS(status));
+        }
+
         children_running--;
     }
-    if (pid == -1 && errno != ECHILD) {
-        perror("waitpid");
-        children_running = 0;
-    }
-    if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
-        fprintf(stderr, "Exit status %d\n", WEXITSTATUS(status));
-    }
-    if (WIFSIGNALED(status)) {
-        fprintf(stderr, "Terminated by signal %d\n", WTERMSIG(status));
+    if (pid == -1 ) { // irregular termination of waitpid loop
+        if (errno == ECHILD) // if no more children (normal)
+            return;
+        if (errno == EINTR) // if killed by interrupt, try again
+            reap_children();
+        else { // acutally not good, throw error
+            perror("waitpid");
+            children_running = 0;
+        }
     }
 }
 
@@ -371,9 +375,6 @@ int main(void) {
     sigaction(SIGINT, &sa, NULL);
 
     while (status) {
-
-        if (children_running) // if child running, wait for done/killed
-            reap_children();
 
         display_prompt();
         /* Read input and handle signal interruption */
@@ -404,6 +405,9 @@ int main(void) {
 
         /* Execute external command */
         execute_command(args, argc);
+
+        if (children_running) // if child running, wait for done/killed
+            reap_children();
     }
 
     printf("SLOsh exiting...\n");
