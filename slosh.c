@@ -184,7 +184,6 @@ void execute_command(char **args, int argc) {
     }
     cmds[pipes+1] = NULL;
     if (pipes) { // do piping stuff
-        pid_t pids[pipes+1];
         int pipefds[pipes][2];
 
         //create all pipes
@@ -202,7 +201,8 @@ void execute_command(char **args, int argc) {
 
             if (pid == 0) { // child
                 // set sig handlers back to default
-                struct sigaction sa = {0};
+                struct sigaction sa;
+		memset(&sa, 0, sizeof(sa));
                 sa.sa_handler = SIG_DFL;
                 sigemptyset(&sa.sa_mask);
                 sa.sa_flags = 0;
@@ -253,7 +253,6 @@ void execute_command(char **args, int argc) {
             }
 
             // parent
-            pids[i] = pid;
             children_running++;
         }
         //close all pipes in parent
@@ -270,8 +269,9 @@ void execute_command(char **args, int argc) {
 
             if (pid == 0) { // child
                 // set sig handlers back to default in child
-                struct sigaction sa = {0};
-                sa.sa_handler = SIG_DFL;
+                struct sigaction sa;
+		memset(&sa, 0, sizeof(sa));
+		sa.sa_handler = SIG_DFL;
                 sigemptyset(&sa.sa_mask);
                 sa.sa_flags = 0;
 
@@ -367,7 +367,8 @@ int main(void) {
     int builtin_result;
 
     /* TODO: Set up signal handling. Which signals matter to a shell? */
-    struct sigaction sa = {0};
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
     sa.sa_handler = sigint_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
